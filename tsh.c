@@ -170,11 +170,74 @@ int main(int argc, char **argv)
 */
 void eval(char *cmdline)
 {
-    char **argv;
-    parseline(cmdline, argv);
-    char quit[5] = "quit";
-    if (strcmp())
-        printf("quit entered");
+
+    if (cmdline[0] == '\n')
+        return;
+    char **newArgv = malloc(MAXARGS);
+    pid_t pid;
+    sigset_t oldSet, newSet;
+    int exitStat, status, execVal;
+
+    int bg = parseline(cmdline, newArgv);
+
+    // check if it's built-in cmd
+    if (builtin_cmd(newArgv) == 0)
+    {
+        // Not built-in cmd
+        // We need to do some work here.
+
+        // parent must use sigprocmask to block SIGCHLD signals before fork()
+        sigemptyset(&newSet);                  // Initializing the new signal set
+        sigaddset(&newSet, SIGCHLD);           // Assigning SIGCHLD to our new signal set
+        sigprocmask(SIG_BLOCK, &newSet, NULL); // the newSet(SIGCHLD) is BLOCKED
+
+        pid = fork();
+        if (bg)
+            addjob(jobs, pid, BG, cmdline);
+
+        if (pid == 0)
+        {
+            // Child running the user job
+            sigprocmask(SIG_UNBLOCK, &newSet, NULL); // newSet(CHILDSIG) is unblocked
+            setpgid(0, 0);                           // puts the child in a new process group
+                                                     // whose group id is identical
+            execVal = execve(newArgv[0], newArgv, environ);
+            if (execVal == 0)
+                exit(0);
+            else if (execVal < 0)
+            {
+                printf("%s: Command not found. \n", newArgv[0]);
+                exit(0);
+            }
+            else
+            {
+                // this is when the child is terminated by the signal
+                exit(1);
+            }
+        }
+        else
+        {
+            // We are in Parent block.
+            if (!bg)
+            {
+                // Foreground
+                // Parent waits for FG job to terminate
+                waitpid(pid, &status, 0); // Let the child finish its job
+                if (WIFEXITED(status))
+                {
+                    exitStat = WEXITSTATUS(status); // Let's see how the child exited
+                }
+                printf("FG: child exited with %d\n", exitStat);
+            }
+            else
+            {
+                // Background
+                // Parent do not wait.
+                waitpid(pid, &status, WNOHANG); // keep runing. Returns
+                                                // terminated child PID
+            }
+        }
+    }
 
     return;
 }
@@ -234,8 +297,8 @@ int parseline(const char *cmdline, char **argv)
     if (argc == 0) /* ignore blank line */
         return 1;
 
-    /* should the job run in the background? */
-    if ((bg = (*argv[argc - 1] == '&')) != 0)
+    /* should the job run in the background?  */
+    if ((bg = (*argv[argc - 1] == '&')) != 0) // if &, then bg = 1
     {
         argv[--argc] = NULL;
     }
@@ -249,6 +312,17 @@ int parseline(const char *cmdline, char **argv)
  */
 int builtin_cmd(char **argv)
 {
+    if (strcmp(argv[0], "quit") == 0)
+        exit(0);
+    else if (strcmp(argv[0], "jobs") == 0)
+    {
+        listjobs(jobs);
+        return 1; // It IS builtin command
+    }
+    else if (!strcmp(argv[0], "bg") || !strcmp(argv[0], "fg"))
+    {
+        do_bgfg(argv);
+    }
     return 0; /* not a builtin command */
 }
 
@@ -257,7 +331,8 @@ int builtin_cmd(char **argv)
  */
 void do_bgfg(char **argv)
 {
-    return;
+    // if (!strcmp(argv[0], ))
+    //    return;
 }
 
 /* 
