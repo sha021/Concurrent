@@ -326,6 +326,23 @@ int builtin_cmd(char **argv)
     {
         do_bgfg(argv);
     }
+    else if (strcmp(argv[0], "kill") == 0)
+    {
+        int jid, pid;
+
+        if (argv[1][0] == "%")
+        {
+            jid = atoi(argv[1]);
+            jid++;
+            pid = (getjobjid(jobs, jid))->pid;
+        }
+        else
+        {
+            pid = atoi(argv[1]);
+        }
+        kill(-pid, SIGINT);
+        return 1;
+    }
     return 0; /* not a builtin command */
 }
 
