@@ -330,7 +330,7 @@ int builtin_cmd(char **argv)
     {
         int jid, pid;
 
-        if (argv[1][0] == "%")
+        if (argv[1][0] == '%')
         {
             jid = atoi(argv[1]);
             jid++;
