@@ -174,12 +174,12 @@ void eval(char *cmdline)
     if (cmdline[0] == '\n')
         return;
     char **newArgv = malloc(MAXARGS);
-    pid_t pid;
+    pid_t pid, rpid;
     sigset_t oldSet, newSet;
     int exitStat, status, execVal;
 
     int bg = parseline(cmdline, newArgv);
-
+    int state = bg + 1;
     // check if it's built-in cmd
     if (builtin_cmd(newArgv) == 0)
     {
@@ -192,53 +192,57 @@ void eval(char *cmdline)
         sigprocmask(SIG_BLOCK, &newSet, NULL); // the newSet(SIGCHLD) is BLOCKED
 
         pid = fork();
-        if (bg)
-            addjob(jobs, pid, BG, cmdline);
 
         if (pid == 0)
         {
+
             // Child running the user job
-            sigprocmask(SIG_UNBLOCK, &newSet, NULL); // newSet(CHILDSIG) is unblocked
-            setpgid(0, 0);                           // puts the child in a new process group
-                                                     // whose group id is identical
-            execVal = execve(newArgv[0], newArgv, environ);
-            if (execVal == 0)
-                exit(0);
-            else if (execVal < 0)
+            setpgid(0, 0);                                  // puts the child in a new process group
+            execVal = execve(newArgv[0], newArgv, environ); // whose group id is identical
+
+            if (execVal < 0)
             {
                 printf("%s: Command not found. \n", newArgv[0]);
-                exit(0);
-            }
-            else
-            {
-                // this is when the child is terminated by the signal
-                exit(1);
+                exit(-1);
             }
         }
         else
         {
+
             // We are in Parent block.
             if (!bg)
             {
                 // Foreground
                 // Parent waits for FG job to terminate
+                //addjob(jobs, pid, FG, cmdline);
                 waitpid(pid, &status, 0); // Let the child finish its job
                 if (WIFEXITED(status))
                 {
                     exitStat = WEXITSTATUS(status); // Let's see how the child exited
                 }
-                printf("FG: child exited with %d\n", exitStat);
+
+                if (exitStat == 0)
+                    addjob(jobs, pid, state, cmdline);
+
+                /*
+                    if (!waitfg(pid))
+                    {
+                        waitpid(pid, &status, 0);
+                    }
+                    else
+                        kill(pid, SIGINT);
+                */
             }
             else
             {
                 // Background
                 // Parent do not wait.
-                waitpid(pid, &status, WNOHANG); // keep runing. Returns
-                                                // terminated child PID
+                addjob(jobs, pid, state, cmdline);
+                //waitpid(pid, &status, WNOHANG); // keep runing. Returns
             }
+            sigprocmask(SIG_UNBLOCK, &newSet, NULL); // newSet(CHILDSIG) is unblocked
         }
     }
-
     return;
 }
 
@@ -340,6 +344,7 @@ void do_bgfg(char **argv)
  */
 int waitfg(pid_t pid)
 {
+
     return 0;
 }
 
@@ -356,16 +361,38 @@ int waitfg(pid_t pid)
  */
 void sigchld_handler(int sig)
 {
+    int status;
+    pid_t pid = waitpid(-1, &status, WNOHANG | WUNTRACED);
+    if (pid)
+    {
+        printf("deleting pid %d\n", pid);
+        deletejob(jobs, pid);
+        printf("done deleting\n");
+    }
     return;
 }
 
 /* 
  * sigint_handler - The kernel sends a SIGINT to the shell whenver the
  *    user types ctrl-c at the keyboard.  Catch it and send it along
- *    to the foreground job.  
+ *    to the foreground job.   
  */
 void sigint_handler(int sig)
 {
+    int i, state;
+    pid_t fgPid;
+
+    for (i = 0; i < MAXJOBS; i++)
+    {
+        state = jobs[i].state;
+        fgPid = jobs[i].pid;
+
+        if (state == FG)
+        {
+            printf("\n");
+            kill(-fgPid, SIGINT);
+        }
+    }
     return;
 }
 
@@ -376,6 +403,11 @@ void sigint_handler(int sig)
  */
 void sigtstp_handler(int sig)
 {
+    pid_t fgPid = fgpid(jobs); // got foreground pid
+
+    printf("\n");
+    kill(-fgPid, SIGTSTP);
+
     return;
 }
 
