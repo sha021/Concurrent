@@ -202,13 +202,13 @@ void eval(char *cmdline)
 
             if (execVal < 0)
             {
-                printf("%s: Command not found. \n", newArgv[0]);
+                // printf("%s: Command not found. \n", newArgv[0]);
                 exit(-1);
             }
         }
         else
         {
-
+            addjob(jobs, pid, state, cmdline);
             // We are in Parent block.
             if (!bg)
             {
@@ -220,10 +220,10 @@ void eval(char *cmdline)
                 {
                     exitStat = WEXITSTATUS(status); // Let's see how the child exited
                 }
-
                 if (exitStat == 0)
-                    addjob(jobs, pid, state, cmdline);
-
+                {
+                    deletejob(jobs, pid);
+                }
                 /*
                     if (!waitfg(pid))
                     {
@@ -237,7 +237,6 @@ void eval(char *cmdline)
             {
                 // Background
                 // Parent do not wait.
-                addjob(jobs, pid, state, cmdline);
                 //waitpid(pid, &status, WNOHANG); // keep runing. Returns
             }
             sigprocmask(SIG_UNBLOCK, &newSet, NULL); // newSet(CHILDSIG) is unblocked
@@ -365,9 +364,7 @@ void sigchld_handler(int sig)
     pid_t pid = waitpid(-1, &status, WNOHANG | WUNTRACED);
     if (pid)
     {
-        printf("deleting pid %d\n", pid);
         deletejob(jobs, pid);
-        printf("done deleting\n");
     }
     return;
 }
