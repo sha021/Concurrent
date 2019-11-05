@@ -173,19 +173,20 @@ void eval(char *cmdline)
 
     if (cmdline[0] == '\n')
         return;
-    char **newArgv = malloc(MAXARGS);
-    pid_t pid, rpid;
-    sigset_t oldSet, newSet;
-    int exitStat, status, execVal;
 
+    char **newArgv = malloc(MAXARGS);
+    pid_t pid;
+    sigset_t newSet;
+
+    int status, execVal;
     int bg = parseline(cmdline, newArgv);
     int state = bg + 1;
+
     // check if it's built-in cmd
     if (builtin_cmd(newArgv) == 0)
     {
         // Not built-in cmd
         // We need to do some work here.
-
         // parent must use sigprocmask to block SIGCHLD signals before fork()
         sigemptyset(&newSet);                  // Initializing the new signal set
         sigaddset(&newSet, SIGCHLD);           // Assigning SIGCHLD to our new signal set
@@ -195,51 +196,43 @@ void eval(char *cmdline)
 
         if (pid == 0)
         {
-
             // Child running the user job
             setpgid(0, 0);                                  // puts the child in a new process group
             execVal = execve(newArgv[0], newArgv, environ); // whose group id is identical
+            sigprocmask(SIG_UNBLOCK, &newSet, NULL);        // newSet(CHILDSIG) is unblocked
 
             if (execVal < 0)
             {
-                // printf("%s: Command not found. \n", newArgv[0]);
+                printf("%s: Command not found. \n", newArgv[0]);
                 exit(-1);
             }
+            else
+                exit(0);
         }
         else
         {
             addjob(jobs, pid, state, cmdline);
+            sigprocmask(SIG_UNBLOCK, &newSet, NULL); // newSet(CHILDSIG) is unblocked
+
             // We are in Parent block.
             if (!bg)
             {
-                // Foreground
-                // Parent waits for FG job to terminate
-                //addjob(jobs, pid, FG, cmdline);
-                waitpid(pid, &status, 0); // Let the child finish its job
-                if (WIFEXITED(status))
+                if (waitpid(pid, &status, WUNTRACED))
                 {
-                    exitStat = WEXITSTATUS(status); // Let's see how the child exited
-                }
-                if (exitStat == 0)
-                {
-                    deletejob(jobs, pid);
-                }
-                /*
-                    if (!waitfg(pid))
+                    if (WIFSTOPPED(status))
                     {
-                        waitpid(pid, &status, 0);
+                        printf("\n");
                     }
-                    else
-                        kill(pid, SIGINT);
-                */
+                    else if (WIFSIGNALED(status))
+                    {
+                        printf("\n");
+                    }
+                    else if (WIFEXITED(status))
+                    {
+                        deletejob(jobs, pid);
+                    }
+                }
             }
-            else
-            {
-                // Background
-                // Parent do not wait.
-                //waitpid(pid, &status, WNOHANG); // keep runing. Returns
-            }
-            sigprocmask(SIG_UNBLOCK, &newSet, NULL); // newSet(CHILDSIG) is unblocked
         }
     }
     return;
@@ -322,18 +315,23 @@ int builtin_cmd(char **argv)
         listjobs(jobs);
         return 1; // It IS builtin command
     }
-    else if (!strcmp(argv[0], "bg") || !strcmp(argv[0], "fg"))
+    else if ((strcmp(argv[0], "bg") == 0) || (strcmp(argv[0], "fg") == 0))
     {
         do_bgfg(argv);
+        return 1;
     }
     else if (strcmp(argv[0], "kill") == 0)
     {
         int jid, pid;
 
-        if (argv[1][0] == '%')
+        if (argv[1] == NULL)
         {
-            jid = atoi(argv[1]);
-            jid++;
+            printf("Which process do you want to kill? \n");
+        }
+        else if (argv[1][0] == '%')
+        {
+            char *j = argv[1] + 1;
+            jid = atoi(j);
             pid = (getjobjid(jobs, jid))->pid;
         }
         else
@@ -351,8 +349,32 @@ int builtin_cmd(char **argv)
  */
 void do_bgfg(char **argv)
 {
-    // if (!strcmp(argv[0], ))
-    //    return;
+    int jid, pid;
+    struct job_t *thisjob;
+
+    if (argv[1][0] == '%')
+    {
+        char *j = argv[1] + 1;
+        jid = atoi(j);
+        thisjob = getjobjid(jobs, jid);
+        pid = thisjob->pid;
+    }
+    else
+    {
+        pid = atoi(argv[1]);
+        thisjob = getjobpid(jobs, pid);
+    }
+    if (!strcmp(argv[0], "bg"))
+    {
+        thisjob->state = BG;
+        kill(-pid, SIGCONT);
+    }
+    else if (!strcmp(argv[0], "fg"))
+    {
+        thisjob->state = FG;
+        kill(-pid, SIGCONT);
+        waitfg(pid);
+    }
 }
 
 /* 
@@ -360,7 +382,17 @@ void do_bgfg(char **argv)
  */
 int waitfg(pid_t pid)
 {
-
+    pid_t fgPid = fgpid(jobs);
+    int status;
+    while (pid == fgPid)
+    {
+        if (waitpid(fgPid, &status, 0))
+        {
+            deletejob(jobs, fgPid);
+            break;
+        }
+        sleep(1);
+    }
     return 0;
 }
 
@@ -378,11 +410,12 @@ int waitfg(pid_t pid)
 void sigchld_handler(int sig)
 {
     int status;
-    pid_t pid = waitpid(-1, &status, WNOHANG | WUNTRACED);
+    pid_t pid = waitpid(-1, &status, WNOHANG);
     if (pid)
     {
         deletejob(jobs, pid);
     }
+
     return;
 }
 
@@ -404,6 +437,7 @@ void sigint_handler(int sig)
         if (state == FG)
         {
             printf("\n");
+            deletejob(jobs, fgPid);
             kill(-fgPid, SIGINT);
         }
     }
@@ -417,9 +451,10 @@ void sigint_handler(int sig)
  */
 void sigtstp_handler(int sig)
 {
+
     pid_t fgPid = fgpid(jobs); // got foreground pid
 
-    printf("\n");
+    getjobpid(jobs, fgPid)->state = ST;
     kill(-fgPid, SIGTSTP);
 
     return;
